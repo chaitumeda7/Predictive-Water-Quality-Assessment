@@ -3,6 +3,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import joblib
+import os
 
 # ---------------------------------
 # PAGE CONFIGURATION
@@ -18,13 +19,75 @@ st.set_page_config(
 # LOAD TRAINED MODEL
 # ---------------------------------
 
-data = joblib.load("water_quality_model.pkl")
+MODEL_PATH = "water_quality_model.pkl"
 
-best_model = data["best_model"]
-best_model_name = data["best_model_name"]
-imputer = data["imputer"]
-scaler = data["scaler"]
-features = data["features"]
+
+@st.cache_resource
+def load_model():
+
+    if not os.path.exists(MODEL_PATH):
+        raise FileNotFoundError(
+            f"{MODEL_PATH} not found. "
+            "Please upload the trained model file."
+        )
+
+    data = joblib.load(MODEL_PATH)
+
+    if not isinstance(data, dict):
+        raise ValueError(
+            "Invalid model file. Expected a dictionary."
+        )
+
+    # Support alternative key names from older model files
+    aliases = {
+        "best_model": ["best_model", "model"],
+        "best_model_name": ["best_model_name", "model_name"],
+        "imputer": ["imputer"],
+        "scaler": ["scaler"],
+        "features": ["features"]
+    }
+
+    loaded = {}
+
+    for required_key, possible_keys in aliases.items():
+
+        for key in possible_keys:
+
+            if key in data:
+                loaded[required_key] = data[key]
+                break
+
+        if required_key not in loaded:
+            raise KeyError(
+                f"Missing key: {required_key}. "
+                f"Available keys: {list(data.keys())}"
+            )
+
+    return loaded
+
+
+try:
+
+    data = load_model()
+
+    best_model = data["best_model"]
+    best_model_name = data["best_model_name"]
+    imputer = data["imputer"]
+    scaler = data["scaler"]
+    features = data["features"]
+
+except Exception as e:
+
+    st.error(f"Model loading failed: {e}")
+
+    st.info(
+        "Check that water_quality_model.pkl "
+        "contains the trained model, imputer, scaler "
+        "and features."
+    )
+
+    st.stop()
+
 
 # ---------------------------------
 # BACKGROUND AND CUSTOM CSS
@@ -46,7 +109,6 @@ st.markdown("""
     background-attachment: fixed;
 }
 
-/* Main heading */
 .hero {
     text-align: center;
     padding: 35px 10px;
@@ -64,7 +126,6 @@ st.markdown("""
     font-size: 18px;
 }
 
-/* Section heading */
 .section-heading {
     color: white;
     text-align: center;
@@ -73,7 +134,6 @@ st.markdown("""
     padding: 15px;
 }
 
-/* Information card */
 .info-card {
     background: rgba(255,255,255,0.94);
     padding: 22px;
@@ -82,7 +142,6 @@ st.markdown("""
     color: #12334a;
 }
 
-/* Footer */
 .footer {
     text-align: center;
     color: white;
@@ -90,19 +149,25 @@ st.markdown("""
     margin-top: 30px;
 }
 
-/* Labels */
 label {
     color: white !important;
     font-weight: bold !important;
 }
 
-/* Input text */
 input {
     color: #12334a !important;
 }
 
+.stButton button {
+    background-color: #00a6c7;
+    color: white;
+    font-weight: bold;
+    border-radius: 10px;
+}
+
 </style>
 """, unsafe_allow_html=True)
+
 
 # ---------------------------------
 # HOME PAGE
@@ -126,6 +191,7 @@ Detection and Potability Prediction
 </div>
 """, unsafe_allow_html=True)
 
+
 # ---------------------------------
 # MODEL INFORMATION
 # ---------------------------------
@@ -141,12 +207,15 @@ st.markdown(
     unsafe_allow_html=True
 )
 
+
 # ---------------------------------
 # INPUT PARAMETERS
 # ---------------------------------
 
 st.markdown(
-    '<div class="section-heading">🌊 WATER QUALITY PREDICTION SYSTEM</div>',
+    '<div class="section-heading">'
+    '🌊 WATER QUALITY PREDICTION SYSTEM'
+    '</div>',
     unsafe_allow_html=True
 )
 
@@ -154,6 +223,7 @@ st.write(
     "Enter the physical and chemical parameters "
     "of the water sample below."
 )
+
 
 with st.form("water_quality_form"):
 
@@ -227,6 +297,7 @@ with st.form("water_quality_form"):
         use_container_width=True
     )
 
+
 # ---------------------------------
 # PREDICTION
 # ---------------------------------
@@ -247,99 +318,168 @@ if submitted:
 
     try:
 
-        # Match original training feature order
-        input_data = input_data[features]
+        # Check feature compatibility
+
+        if isinstance(features, (list, tuple, np.ndarray)):
+            input_data = input_data[list(features)]
+
+        else:
+            raise ValueError(
+                "Invalid features stored in model file."
+            )
 
         # Apply trained imputer
+
         processed_data = imputer.transform(input_data)
 
-        # Apply scaling for selected models
-        if best_model_name in [
-            "Logistic Regression",
-            "SVM",
-            "KNN"
-        ]:
-            processed_data = scaler.transform(processed_data)
+        # Apply scaler when available
 
-        # Predict
-        prediction = best_model.predict(processed_data)[0]
+        if scaler is not None:
 
-        probabilities = best_model.predict_proba(
+            processed_data = scaler.transform(
+                processed_data
+            )
+
+        # Prediction
+
+        prediction = best_model.predict(
             processed_data
         )[0]
 
-        class_probabilities = dict(
-            zip(best_model.classes_, probabilities)
-        )
+        # Class probabilities
 
-        potable_prob = class_probabilities.get(1, 0) * 100
-        non_potable_prob = class_probabilities.get(0, 0) * 100
+        if hasattr(best_model, "predict_proba"):
 
-        confidence = max(probabilities) * 100
+            probabilities = best_model.predict_proba(
+                processed_data
+            )[0]
 
-        # Display result
+            class_probabilities = dict(
+                zip(best_model.classes_, probabilities)
+            )
+
+            potable_prob = (
+                class_probabilities.get(1, 0) * 100
+            )
+
+            non_potable_prob = (
+                class_probabilities.get(0, 0) * 100
+            )
+
+            confidence = max(probabilities) * 100
+
+        else:
+
+            potable_prob = None
+            non_potable_prob = None
+            confidence = None
+
+
+        # ---------------------------------
+        # DISPLAY RESULTS
+        # ---------------------------------
+
         st.markdown("---")
 
         st.markdown(
-            '<div class="section-heading">📊 PREDICTION RESULTS</div>',
+            '<div class="section-heading">'
+            '📊 PREDICTION RESULTS'
+            '</div>',
             unsafe_allow_html=True
         )
 
         if prediction == 1:
 
-            st.success("💧 POTABLE WATER (Predicted)")
+            st.success(
+                "💧 POTABLE WATER (Predicted)"
+            )
 
             st.write(
-                "The model predicts that this sample belongs "
-                "to the potable class."
+                "The model predicts that this sample "
+                "belongs to the potable class."
             )
 
         else:
 
-            st.error("⚠️ NON-POTABLE WATER (Predicted)")
+            st.error(
+                "⚠️ NON-POTABLE WATER (Predicted)"
+            )
 
             st.write(
-                "The model predicts that this sample belongs "
-                "to the non-potable class."
+                "The model predicts that this sample "
+                "belongs to the non-potable class."
             )
 
-        # Result metrics
-        c1, c2 = st.columns(2)
 
-        with c1:
-            st.metric(
-                "Prediction Confidence",
-                f"{confidence:.2f}%"
+        # ---------------------------------
+        # RESULT METRICS
+        # ---------------------------------
+
+        if confidence is not None:
+
+            c1, c2 = st.columns(2)
+
+            with c1:
+
+                st.metric(
+                    "Prediction Confidence",
+                    f"{confidence:.2f}%"
+                )
+
+            with c2:
+
+                st.metric(
+                    "Potable Probability",
+                    f"{potable_prob:.2f}%"
+                )
+
+
+            # ---------------------------------
+            # PROBABILITY CHART
+            # ---------------------------------
+
+            probability_data = pd.DataFrame({
+
+                "Water Class": [
+                    "Potable",
+                    "Non-Potable"
+                ],
+
+                "Probability (%)": [
+                    potable_prob,
+                    non_potable_prob
+                ]
+
+            })
+
+            st.subheader("📈 Class Probability")
+
+            st.bar_chart(
+                probability_data.set_index(
+                    "Water Class"
+                )
             )
 
-        with c2:
-            st.metric(
-                "Potable Probability",
-                f"{potable_prob:.2f}%"
+        else:
+
+            st.warning(
+                "Probability and confidence are unavailable "
+                "because this model does not support "
+                "predict_proba()."
             )
 
-        # Probability chart
-        probability_data = pd.DataFrame({
-            "Water Class": ["Potable", "Non-Potable"],
-            "Probability (%)": [
-                potable_prob,
-                non_potable_prob
-            ]
-        })
-
-        st.subheader("📈 Class Probability")
-
-        st.bar_chart(
-            probability_data.set_index("Water Class")
-        )
 
         st.info(
             f"Selected Model: {best_model_name}"
         )
 
+
     except Exception as e:
 
-        st.error(f"Prediction error: {str(e)}")
+        st.error(
+            f"Prediction error: {str(e)}"
+        )
+
 
 # ---------------------------------
 # ABOUT PROJECT
@@ -371,6 +511,7 @@ classify water samples into potable and non-potable classes.
 </div>
 """, unsafe_allow_html=True)
 
+
 # ---------------------------------
 # FOOTER
 # ---------------------------------
@@ -380,9 +521,9 @@ st.markdown("""
 
 <h3>💧 Predictive Water Quality Assessment</h3>
 
-<p>Pollution Detection and Management Using Machine Learning</p>
-
-
+<p>
+Pollution Detection and Management Using Machine Learning
+</p>
 
 <p>
 Note: This prediction is not a substitute for
